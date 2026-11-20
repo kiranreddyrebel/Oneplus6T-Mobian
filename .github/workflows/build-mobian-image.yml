@@ -51,6 +51,11 @@ jobs:
           mkdir -p devices/qcom/packages
           cp -r _artifact_tmp/* custom/
           cp -r _artifact_tmp/* devices/qcom/packages/
+          
+      - name: Remove debug symbol packages
+        run: |
+          find custom devices/qcom/packages \
+            -type f -name '*-dbg_*.deb' -delete
 
       - name: Clean up temp folder
         run: rm -rf _artifact_tmp
