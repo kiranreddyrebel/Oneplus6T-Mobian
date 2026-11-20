@@ -16,7 +16,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            debos debootstrap qemu-system-x86 qemu-user-static \
+            debos debootstrap qemu-system-x86 qemu-user \
             binfmt-support bmap-tools squashfs-tools-ng \
             android-sdk-libsparse-utils yq mkbootimg \
             parted dosfstools e2fsprogs kpartx xz-utils zstd
