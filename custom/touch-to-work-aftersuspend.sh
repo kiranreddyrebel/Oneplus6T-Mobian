@@ -28,7 +28,3 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
-
-sudo systemctl disable --now touch-autobind
-sudo systemctl daemon-reload
-sudo systemctl enable --now touch-rebind
