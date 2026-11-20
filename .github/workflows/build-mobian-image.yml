@@ -28,6 +28,12 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Fix KVM and kernel permissions
+        run: |
+          sudo chmod 644 /boot/vmlinuz-*
+          sudo chmod 666 /dev/kvm
+          ls -l /boot/vmlinuz-* /dev/kvm
+
       - name: Download latest artifact from linux-op6T
         uses: dawidd6/action-download-artifact@v6
         with:
