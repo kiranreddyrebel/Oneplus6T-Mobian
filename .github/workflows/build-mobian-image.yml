@@ -1,32 +1,16 @@
-name: Build Mobian image
+name: Pull kernel artifact and build Mobian image
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
+  push:
+    branches: [main]
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 240
-
+  fetch-and-build:
+    runs-on: ubuntu-latest
     steps:
-      - name: Free up disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune -af || true
-          df -h /
-
-      - name: Checkout
+      - name: Checkout Oneplus6T-Mobian
         uses: actions/checkout@v4
-
-      - name: Enable KVM (needed by debos/fakemachine)
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
 
       - name: Install build dependencies
         run: |
@@ -37,22 +21,70 @@ jobs:
             android-sdk-libsparse-utils yq mkbootimg \
             parted dosfstools e2fsprogs kpartx xz-utils zstd
 
-      - name: Build image
-        run: sudo ./build.sh -s -v -t sdm845 -e phosh -x trixie
-
-      - name: Compress output
+      - name: Enable KVM (needed by debos/fakemachine)
         run: |
-          ls -lh
-          sudo chown -R "$USER" .
-          zstd -T0 -3 --rm ./*.img
-          mkdir -p out
-          mv ./*.img.zst ./*.bmap ./*.tar.gz out/ 2>/dev/null || true
-          ls -lh out/
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Download latest artifact from linux-op6T
+        uses: dawidd6/action-download-artifact@v6
         with:
-          name: mobian-sdm845-phosh
-          path: out/*
-          if-no-files-found: error
-          retention-days: 14
+          github_token: ${{ secrets.GH_PAT }}
+          repo: kiranreddyrebel/linux-op6T
+          workflow_conclusion: success
+          name: YOUR_ARTIFACT_NAME
+          path: _artifact_tmp
+
+      - name: Copy into both target folders
+        run: |
+          mkdir -p custom
+          mkdir -p devices/qcom/packages
+          cp -r _artifact_tmp/* custom/
+          cp -r _artifact_tmp/* devices/qcom/packages/
+
+      - name: Clean up temp folder
+        run: rm -rf _artifact_tmp
+
+      - name: Verify extraction
+        run: |
+          echo "custom/:"
+          ls -la custom/
+          echo "devices/qcom/packages/:"
+          ls -la devices/qcom/packages/
+
+      - name: Make build.sh executable
+        run: chmod +x ./build.sh
+
+      - name: Build Mobian image
+        run: ./build.sh -s -v -t sdm845 -e phosh -x trixie
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add custom devices/qcom/packages
+          git commit -m "Update packages from latest linux-op6T artifact" || echo "No changes"
+          git push
+
+      - name: Locate built image
+        id: find_image
+        run: |
+          IMAGE_PATH=$(find . -maxdepth 3 -type f \( -name "*.img" -o -name "*.img.xz" -o -name "*.img.zip" \) | head -n 1)
+          if [ -z "$IMAGE_PATH" ]; then
+            echo "No image file found!"
+            exit 1
+          fi
+          echo "image_path=$IMAGE_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found image: $IMAGE_PATH"
+
+      - name: Create release and upload image
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Mobian OP6T Build ${{ github.run_number }}
+          files: ${{ steps.find_image.outputs.image_path }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
