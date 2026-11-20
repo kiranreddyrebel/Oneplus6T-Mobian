@@ -71,7 +71,7 @@ jobs:
         run: chmod +x ./build.sh
 
       - name: Build Mobian image
-        run: ./build.sh -s -v -t sdm845 -e phosh -x trixie
+        run: ./build.sh -s -v -t sdm845 -e plasma -x trixie
 
       - name: Commit and push changes
         run: |
