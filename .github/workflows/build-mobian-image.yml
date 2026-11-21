@@ -5,12 +5,32 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
+concurrency:
+  group: mobian-image-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   fetch-and-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
-      - name: Checkout Oneplus6T-Mobian
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/local/lib/android \
+            /usr/local/.ghcup
+          df -h /
+          free -h
 
       - name: Install build dependencies
         run: |
@@ -18,23 +38,23 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             debos debootstrap qemu-system-x86 qemu-user \
             binfmt-support bmap-tools squashfs-tools-ng \
-            android-sdk-libsparse-utils yq mkbootimg \
+            android-sdk-libsparse-utils yq mkbootmkbootimg \
             parted dosfstools e2fsprogs kpartx xz-utils zstd
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+          df -h /
 
-      - name: Enable KVM (needed by debos/fakemachine)
+      - name: Prepare KVM access
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Fix KVM and kernel permissions
-        run: |
-          sudo chmod 644 /boot/vmlinuz-*
+          test -c /dev/kvm || {
+            echo "KVM device /dev/kvm is unavailable"
+            exit 1
+          }
+          sudo chmod 644 /boot/vmlinuz-* 2>/dev/null || true
           sudo chmod 666 /dev/kvm
-          ls -l /boot/vmlinuz-* /dev/kvm
+          ls -l /dev/kvm
 
-      - name: Download latest artifact from linux-op6T
+      - name: Download latest kernel artifact
         uses: dawidd6/action-download-artifact@v6
         with:
           github_token: ${{ secrets.GH_PAT }}
@@ -44,60 +64,63 @@ jobs:
           name: kernel-debs
           path: _artifact_tmp
 
-
-      - name: Copy into both target folders
+      - name: Copy kernel packages into build inputs
         run: |
-          mkdir -p custom
-          mkdir -p devices/qcom/packages
-          cp -r _artifact_tmp/* custom/
-          cp -r _artifact_tmp/* devices/qcom/packages/
-          
-      - name: Remove debug symbol packages
-        run: |
+          test -d _artifact_tmp
+          find _artifact_tmp -type f -name '*.deb' -print -quit | grep -q .
+          mkdir -p custom devices/qcom/packages
+          cp -a _artifact_tmp/. custom/
+          cp -a _artifact_tmp/. devices/qcom/packages/
           find custom devices/qcom/packages \
             -type f -name '*-dbg_*.deb' -delete
-
-      - name: Clean up temp folder
-        run: rm -rf _artifact_tmp
-
-      - name: Verify extraction
-        run: |
-          echo "custom/:"
-          ls -la custom/
-          echo "devices/qcom/packages/:"
-          ls -la devices/qcom/packages/
-
-      - name: Make build.sh executable
-        run: chmod +x ./build.sh
+          rm -rf _artifact_tmp
+          df -h /
+          free -h
 
       - name: Build Mobian image
-        run: ./build.sh -s -v -t sdm845 -e plasma-mobile -x trixie
-
-      - name: Commit and push changes
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add custom devices/qcom/packages
-          git commit -m "Update packages from latest linux-op6T artifact" || echo "No changes"
-          git push
+          chmod +x ./build.sh
+          ./build.sh -s -v -t sdm845 \
+            -e plasma-mobile -x trixie
+          df -h /
+          free -h
 
-      - name: Locate built image
-        id: find_image
+      - name: Compress and locate image
+        id: image
         run: |
-          IMAGE_PATH=$(find . -maxdepth 3 -type f \( -name "*.img" -o -name "*.img.xz" -o -name "*.img.zip" \) | head -n 1)
-          if [ -z "$IMAGE_PATH" ]; then
-            echo "No image file found!"
+          IMAGE_PATH=$(find . -maxdepth 1 -type f \
+            -name 'mobian-sdm845-plasma-mobile-*.img' \
+            -print -quit)
+
+          test -n "$IMAGE_PATH" || {
+            echo "No built Mobian image found"
+            ls -lah
             exit 1
-          fi
-          echo "image_path=$IMAGE_PATH" >> "$GITHUB_OUTPUT"
-          echo "Found image: $IMAGE_PATH"
+          }
 
-      - name: Create release and upload image
+          zstd -T2 -3 --rm "$IMAGE_PATH"
+          COMPRESSED_PATH="${IMAGE_PATH}.zst"
+
+          test -s "$COMPRESSED_PATH"
+          echo "image_path=$COMPRESSED_PATH" >> "$GITHUB_OUTPUT"
+          ls -lh "$COMPRESSED_PATH"
+          df -h /
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobian-sdm845-plasma-mobile
+          path: ${{ steps.image.outputs.image_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
+          tag_name: build-${{ github.run_number }}-${{ github.run_attempt }}
           name: Mobian OP6T Build ${{ github.run_number }}
-          files: ${{ steps.find_image.outputs.image_path }}
+          files: ${{ steps.image.outputs.image_path }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
