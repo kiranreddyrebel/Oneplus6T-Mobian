@@ -29,6 +29,8 @@ jobs:
             /usr/local/share/boost \
             /usr/local/lib/android \
             /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache
+          sudo apt-get clean
           df -h /
           free -h
 
@@ -43,6 +45,17 @@ jobs:
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
           df -h /
+
+      - name: Free disk space
+        run: |
+         sudo apt-get clean
+         sudo rm -rf /var/cache/apt/archives/*
+         sudo rm -rf /var/lib/apt/lists/*
+
+         df -h /
+         df -h /var/cache/apt/archives
+
+      
 
       - name: Prepare KVM access
         run: |
