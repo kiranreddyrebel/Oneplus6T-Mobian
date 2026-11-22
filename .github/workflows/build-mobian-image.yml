@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             debos debootstrap qemu-system-x86 qemu-user \
             binfmt-support bmap-tools squashfs-tools-ng \
-            android-sdk-libsparse-utils yq android-sdk-adb android-sdk-fastboot \
+            android-sdk-libsparse-utils yq android-* \
             parted dosfstools e2fsprogs kpartx xz-utils zstd
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
