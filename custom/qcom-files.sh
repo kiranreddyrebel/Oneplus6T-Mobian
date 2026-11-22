@@ -37,12 +37,7 @@ copy_file call_audio_idle_suspend_workaround.service \
 
 echo
 echo "Reloading user systemd units..."
-for service in \
-    call_audio_idle_suspend_workaround.service \
-    q6voiced \
-    81voltd \
-    qbootctl \
-    touch-autobind.service
+for service in call_audio_idle_suspend_workaround.service q6voiced 81voltd qbootctl touch-autobind.service touch-rebind
 do
     if systemctl --global enable "$service"; then
         echo "SUCCESS: Enabled $service"
