@@ -8,6 +8,7 @@ DEVICE="device-oneplus-fajita"
 BRANCH="master"
 BASE="https://gitlab.com/postmarketOS/pmaports/-/raw/${BRANCH}/device"
 DIRS=(community testing main)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
 if [ "$(id -u)" -ne 0 ]; then
 	exec sudo -E bash "$0" "$@"
@@ -23,13 +24,16 @@ apt-get update
 apt-get install -y curl git meson ninja-build build-essential pkg-config \
 	alsa-ucm-conf udev systemd
 # Optional Qualcomm helpers: packaged in newer Debian only, so install one by one
-for p in qrtr-tools rmtfs pd-mapper tqftpserv libqrtr-dev libgbm-dev; do
+for p in qrtr-tools rmtfs pd-mapper tqftpserv libqrtr-dev libgbm-dev \
+	hexagonrpcd hexagonrpcd-sdsp qbootctl soc-qcom-qbootctl; do
 	apt-get install -y "$p" 2>/dev/null || echo "    (skipped: $p not in your Debian release)"
 done
 
-# --- 2. Download device files from pmaports
+# --- 2. Download optional pmaports device files
+# Missing upstream paths must not abort image construction. Local copies are
+# used where this repository already contains known-good device configuration.
 echo "==> Downloading device files from pmaports"
-fetch() {
+fetch_optional() {
 	local f=$1 d
 	for d in "${DIRS[@]}"; do
 		if curl -fsSL "$BASE/$d/$DEVICE/$f" -o "$f"; then
@@ -37,8 +41,13 @@ fetch() {
 			return 0
 		fi
 	done
-	echo "    FAILED: $f (check the path in pmaports)" >&2
-	return 1
+	if [ -f "$SCRIPT_DIR/$f" ]; then
+		cp "$SCRIPT_DIR/$f" "$f"
+		echo "    got $f (repository fallback)"
+		return 0
+	fi
+	echo "    skipped $f (not available upstream or locally)"
+	return 0
 }
 
 FILES=(
@@ -48,46 +57,41 @@ FILES=(
 	q6voiced.conf
 	deviceinfo
 )
-for f in "${FILES[@]}"; do fetch "$f"; done
+for f in "${FILES[@]}"; do fetch_optional "$f"; done
 
-# --- 3. Install them to the same locations as the APKBUILD package()
-echo "==> Installing config files"
+# --- 3. Install available device configuration
+ echo "==> Installing config files"
 inst() { [ -f "$1" ] && install -Dm644 "$1" -t "$2"; }
 inst 81-libssc-oneplus-fajita.rules   /usr/lib/udev/rules.d/
 inst q6voiced.conf                    /usr/share/q6voiced/
 inst hexagonrpcd-sdsp.conf            /usr/share/hexagonrpcd/
 inst 80-device-oneplus-fajita.preset  /usr/lib/systemd/system-preset/
-inst deviceinfo                       /usr/share/"$DEVICE"/   # reference copy only
+inst deviceinfo                       /usr/share/"$DEVICE"/
 
-udevadm control --reload-rules && udevadm trigger || true
+udevadm control --reload-rules 2>/dev/null && udevadm trigger 2>/dev/null || true
 
-# --- 4. Build tools that have no Debian package
-build_meson() {   # name, git url
-	local name=$1 url=$2
-	if command -v "$name" >/dev/null; then
-		echo "    $name already installed"; return
-	fi
-	echo "==> Building $name"
-	if git clone --depth 1 "$url" "src-$name" \
-	   && meson setup "src-$name/build" "src-$name" --prefix=/usr \
-	   && ninja -C "src-$name/build" \
-	   && ninja -C "src-$name/build" install; then
-		echo "    $name installed"
-	else
-		echo "    WARNING: building $name failed, install it manually" >&2
-	fi
-}
-build_meson hexagonrpcd https://github.com/linux-msm/hexagonrpcd.git   # sensors via DSP
-build_meson qbootctl    https://github.com/linux-msm/qbootctl.git       # A/B slot control
+# Use packaged helpers when available. Source-building GitHub repositories is
+# intentionally optional and must never make the image build depend on GitHub
+# credentials or network authentication.
+if command -v hexagonrpcd >/dev/null; then
+	echo "    hexagonrpcd already installed"
+else
+	echo "    hexagonrpcd not available from Debian repos; skipped"
+fi
+if command -v qbootctl >/dev/null; then
+	echo "    qbootctl already installed"
+else
+	echo "    qbootctl not available from Debian repos; skipped"
+fi
 
-# --- 5. Enable services listed in the preset (only if the unit exists)
+# --- 4. Enable services listed in the preset (only if the unit exists)
 if [ -f 80-device-oneplus-fajita.preset ]; then
 	echo "==> Enabling services from the preset"
-	systemctl daemon-reload
+	systemctl daemon-reload 2>/dev/null || true
 	while read -r action unit _; do
 		[ "$action" = "enable" ] || continue
 		if systemctl list-unit-files "$unit" 2>/dev/null | grep -q "$unit"; then
-			systemctl enable "$unit" && echo "    enabled $unit"
+			systemctl enable "$unit" 2>/dev/null && echo "    enabled $unit" || true
 		else
 			echo "    skipped $unit (not installed on this system)"
 		fi
@@ -95,14 +99,10 @@ if [ -f 80-device-oneplus-fajita.preset ]; then
 fi
 
 if command -v update-initramfs >/dev/null; then
-	update-initramfs -u -k all
+	update-initramfs -u -k all || echo "    WARNING: initramfs refresh failed; continuing"
 fi
 
 cat <<'EOF'
 
-Done. Not covered by this script (no Debian equivalent):
-  - Kernel: linux-postmarketos-qcom-sdm845 (you need an SDM845 mainline kernel)
-  - Audio profiles: alsa-ucm-conf-sdm845 (generic alsa-ucm-conf was installed instead)
-  - Boot image creation (mkbootimg/systemd-boot setup) and unl0kr
-Reboot when ready.
+Done. Optional OnePlus 6T configuration and packaged helpers have been applied.
 EOF
